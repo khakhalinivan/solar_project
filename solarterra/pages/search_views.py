@@ -9,6 +9,10 @@ import datetime as dt
 
 from pages.plotting import get_plots
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def search(request):
     
@@ -16,7 +20,7 @@ def search(request):
         source_form = SourceForm(data=request.POST)
  
         if source_form.is_valid():
-            print("valid!")
+            logger.debug("Search form valid.")
             # go and play, you are free, child
             var_instances = Variable.objects.filter(id__in=source_form.cleaned_data['sources'])
             t_start = source_form.cleaned_data['ts_start']
@@ -48,7 +52,7 @@ def search(request):
 
         else:
             # finish page reconstruction after invalid values or do form validation client-side
-            print("invalid!")
+            logger.debug("Search form invalid: %s", source_form.errors.as_json())
             return render(request, "pages/sources.html", context={
                 'datasets' : Dataset.objects.have_data().order_by('tag'),
                 'form' : source_form

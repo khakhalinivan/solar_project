@@ -43,7 +43,7 @@ class SourceForm(forms.Form):
 
     sources = forms.ModelMultipleChoiceField(
         label="Загруженные наборы данных",
-        queryset=Variable.objects.plottable(),
+        queryset=Variable.objects.none(),
         widget=CustomCheckboxSelectMultiple(),
         required=True,
     )
@@ -65,11 +65,21 @@ class SourceForm(forms.Form):
         required=False
     )
 
+    def __init__(self, *args, **kwargs):
+        load_sources_queryset = kwargs.pop("load_sources_queryset", True)
+        super().__init__(*args, **kwargs)
+        if load_sources_queryset:
+            self.fields["sources"].queryset = Variable.objects.plottable()
+
     def clean(self):
         cleaned_data = super().clean()
         ts_start = cleaned_data.get("ts_start")
         ts_end = cleaned_data.get("ts_end")
 
+        if ts_start is None or ts_end is None:
+            return cleaned_data
+
         if ts_start >= ts_end:
             raise ValidationError("Start time should be before end time.")
 
+        return cleaned_data

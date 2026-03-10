@@ -45,6 +45,43 @@ function dtw_initTimeContainer(prefix) {
 
 }
 
+function dtw_parseLocalDateTime(rawValue) {
+    if (!rawValue) {
+        return null;
+    }
+
+    let value = String(rawValue).trim();
+    if (!value) {
+        return null;
+    }
+
+    let parts = value.split(/[T ]/);
+    let datePart = parts[0];
+    let timePart = parts.length > 1 ? parts[1] : null;
+
+    let datePieces = datePart.split("-").map((v) => Number.parseInt(v, 10));
+    if (datePieces.length !== 3 || datePieces.some((v) => Number.isNaN(v))) {
+        return null;
+    }
+
+    let year = datePieces[0];
+    let month = datePieces[1];
+    let day = datePieces[2];
+
+    let hour = 0;
+    let minute = 0;
+    let second = 0;
+
+    if (timePart) {
+        let timePieces = timePart.split(":").map((v) => Number.parseInt(v, 10));
+        if (timePieces.length >= 1 && !Number.isNaN(timePieces[0])) hour = timePieces[0];
+        if (timePieces.length >= 2 && !Number.isNaN(timePieces[1])) minute = timePieces[1];
+        if (timePieces.length >= 3 && !Number.isNaN(timePieces[2])) second = timePieces[2];
+    }
+
+    return new Date(year, month - 1, day, hour, minute, second);
+}
+
 function dtw_initInput(inputId) {
     
     let el = document.getElementById(inputId);
@@ -53,7 +90,11 @@ function dtw_initInput(inputId) {
     if (el.hasAttribute('data-sub')) {
         
         dtw_launchRerender(el);
-        let savedDate = new Date( Date.parse(el.dataset.sub));
+        let savedDate = dtw_parseLocalDateTime(el.dataset.sub);
+        if (!savedDate) {
+            console.log("invalid initial datetime", el.dataset.sub);
+            return;
+        }
 
         let hh = String(savedDate.getHours()).padStart(2, '0');
         let mm = String(savedDate.getMinutes()).padStart(2, '0');
@@ -273,7 +314,7 @@ function dtw_launchRerender(element, hide_months=false, hide_years=false) {
     let actualCalDays = document.getElementById(`${prefix}-cal-days-container`);
     actualCalDays.innerHTML = "";
     
-    let newDate = new Date( Date.parse(element.dataset.sub));
+    let newDate = dtw_parseLocalDateTime(element.dataset.sub) || new Date();
     
     highlight = !(hide_months || hide_years)
 
@@ -446,7 +487,7 @@ function dtw_clearInput(clearEl, element_id) {
     targetEl.value = '';
     targetEl.dataset.hours = '00';
 
-    elementContainer = document.getElementById(`${prefix}-datetime-container`);
+    elementContainer = document.getElementById(`${element_id}-datetime-container`);
     removeClassFromClass(elementContainer, "dtw-js-hours", "dtw-time-option-selected");
     targetEl.dataset.minutes = '00';
     removeClassFromClass(elementContainer, "dtw-js-minutes", "dtw-time-option-selected");
@@ -456,7 +497,7 @@ function dtw_clearInput(clearEl, element_id) {
     dtw_buttonExchange(element_id, true);
     confButtonChange(element_id, false);
     
-    document.getElementById('hour-00').scrollIntoView({ behavior: "smooth"});
-    document.getElementById('minute-00').scrollIntoView({ behavior: "smooth"});
+    document.getElementById(`${element_id}-hour-00`).scrollIntoView({ behavior: "smooth"});
+    document.getElementById(`${element_id}-minute-00`).scrollIntoView({ behavior: "smooth"});
     document.getElementById('second-00').scrollIntoView({ behavior: "smooth"});        
 }

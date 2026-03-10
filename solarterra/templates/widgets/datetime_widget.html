@@ -27,9 +27,10 @@
 <div class="dtw-datetime-container" id="{{ widget.attrs.id }}-datetime-container">
     <div class="dtw-visible-container">
         <div class="dtw-input-container"  onclick="show('{{ widget.attrs.id }}-dropdown-container');">
-            <input readonly name="{{ widget.name }}" id="{{ widget.attrs.id }}" class="dtw-input-field" type="text" placeholder="yyyy-mm-dd hh:mm:ss" 
+            <input readonly name="{{ widget.name }}" id="{{ widget.attrs.id }}" class="dtw-input-field" type="text" placeholder="yyyy-mm-dd hh:mm:ss"
+            {% if widget.value %}value="{{ widget.value|date:'Y-m-d H:i:s' }}"{% endif %}
 			data-days="" data-months="" data-year=""
-			data-hours="00" data-minutes="00" data-seconds="00" {% if widget.value %}data-sub="{{ widget.value }}" data-prefix="{{ widget.attrs.id }}"{% endif %}>
+			data-hours="00" data-minutes="00" data-seconds="00" {% if widget.value %}data-sub="{{ widget.value|date:'Y-m-d\\TH:i:s' }}" data-prefix="{{ widget.attrs.id }}"{% endif %}>
         </div>
         <div id="{{ widget.attrs.id }}-choose-datetime" class="dtw-choose-time" onclick="show('{{ widget.attrs.id }}-dropdown-container');">
           <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#b4b4b4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
