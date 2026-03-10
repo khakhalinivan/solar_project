@@ -2,6 +2,7 @@ from django.db import models
 import uuid
 import datetime
 import re
+import json
 from solarterra.abstract_models import GetManager
 from django.apps import apps
 from django.conf import settings
@@ -571,6 +572,40 @@ class DataType(models.Model):
     # takes a value in some numpy type, because python cdf library unpacks all data to numpy
     @classmethod
     def proper_type(cls, value_str, proper_value):
+        if value_str is None:
+            return None
+
+        # Matchfiles sometimes store fill values as single-item lists/arrays; normalize to a scalar.
+        if isinstance(value_str, (list, tuple, np.ndarray)):
+            if len(value_str) == 0:
+                return None
+            value_str = value_str[0]
+
+        if isinstance(value_str, bytes):
+            value_str = value_str.decode("utf-8", errors="ignore")
+
+        # Normalize to string for parsing below (numpy scalars, numbers, etc.).
+        if not isinstance(value_str, str):
+            value_str = str(value_str)
+
+        value_str = value_str.strip()
+        if not value_str:
+            return None
+
+        # Handle stringified JSON lists like "[-1.0E31]" or "[ -1, -1 ]".
+        if (value_str[0] in "[({" and value_str[-1] in "])}"):
+            try:
+                loaded = json.loads(value_str)
+                if isinstance(loaded, list):
+                    if not loaded:
+                        return None
+                    value_str = str(loaded[0]).strip()
+                else:
+                    value_str = str(loaded).strip()
+            except Exception:
+                # Fall back to regex token extraction below.
+                pass
+
         # separate datetime case
         if isinstance(proper_value, datetime.datetime):
             template = "%d-%b-%Y %H:%M:%S.%f"
@@ -578,7 +613,29 @@ class DataType(models.Model):
                 dat = datetime.datetime.strptime(value_str, template)
                 return dat
             except Exception as e:
-                make_log_entry(f"Could not convert value str '{value_str}' to datetime using template '{template}'")
+                # Some epoch fillvals come as numeric sentinels like "-1e+31".
+                # Try to interpret numeric strings via SpacePy epoch conversion.
+                m = re.search(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", value_str)
+                token = m.group(0) if m else None
+                if token is not None:
+                    try:
+                        from spacepy import pycdf  # imported lazily; only used during data load
+
+                        # CDF_EPOCH fillvals are float-like.
+                        if any(ch in token for ch in ".eE"):
+                            return pycdf.lib.epoch_to_datetime(float(token))
+
+                        # TT2000 fillvals are int-like; convert TT2000 -> EPOCH -> datetime.
+                        tt2000 = int(token)
+                        epoch = pycdf.lib.tt2000_to_epoch(tt2000)
+                        return pycdf.lib.epoch_to_datetime(epoch)
+                    except Exception:
+                        pass
+
+                make_log_entry(
+                    f"Could not convert value str '{value_str}' to datetime using template '{template}'",
+                    "ERROR",
+                )
                 return None
 
         else:
@@ -590,7 +647,30 @@ class DataType(models.Model):
                 return proper_value.__class__(value_str)
 
             except Exception as e:
-                make_log_entry(f"Could not convert value string '{value_str}' to '{proper_value.__class__}': {e}", "ERROR")
+                # Try to extract a numeric token from strings like "[-1.0E31]" or "FILLVAL = -1.0E31".
+                lowered = value_str.lower()
+                if lowered in {"nan", "+nan", "-nan"}:
+                    token = "nan"
+                elif lowered in {"inf", "+inf", "infinity", "+infinity"}:
+                    token = "inf"
+                elif lowered in {"-inf", "-infinity"}:
+                    token = "-inf"
+                else:
+                    m = re.search(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", value_str)
+                    token = m.group(0) if m else None
+
+                if token is not None:
+                    try:
+                        if isinstance(proper_value, (int, np.integer)):
+                            return proper_value.__class__(float(token))
+                        return proper_value.__class__(token)
+                    except Exception:
+                        pass
+
+                make_log_entry(
+                    f"Could not convert value string '{value_str}' to '{proper_value.__class__}': {e}",
+                    "ERROR",
+                )
                 return None
 
 

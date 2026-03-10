@@ -61,6 +61,17 @@ def save_single_file(cdf_file, fields, model_class, upload):
                 arr = np.array([raw[part_index]])
             else:
                 arr = np.array([raw])
+
+        # Normalize common scalar-vector shape (records, 1) -> (records,)
+        # This happens for some CDF variables (notably EPOCH*), and avoids downstream
+        # consumers receiving 1-element ndarrays instead of scalar values.
+        if (
+            isinstance(arr, np.ndarray)
+            and arr.ndim > 1
+            and arr.shape[-1] == 1
+            and field.storage_mode != DynamicField.STORAGE_ARRAY
+        ):
+            arr = np.squeeze(arr, axis=-1)
         t_read += timeit.default_timer() - t_read_start
         
         t_prepare_start = timeit.default_timer()
@@ -108,7 +119,12 @@ def save_single_file(cdf_file, fields, model_class, upload):
             #print(f"FILL {fill_value}: {len(arr[arr==fill_value])} / {arr.shape}")
             #print("added fillval condition", var.fillval, type(arr[0]), fill_value, type(fill_value))
             if fill_value is None:
-                make_log_entry("Could not parse fillval: file '{cdf_file.full_path}' variable '{var.name}' datatype '{data_type.cdf_file_label}', numpy type '{arr.dtype}'", "ERROR")
+                make_log_entry(
+                    f"Could not parse fillval: file '{cdf_file.full_path}' variable '{var.name}' "
+                    f"fillval '{var.fillval}' numpy type '{arr.dtype}'",
+                    "ERROR",
+                    upload=upload,
+                )
                 exit(1)
             # choose values that are fillvals
             condition = condition | (arr == fill_value)
