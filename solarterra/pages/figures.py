@@ -1,5 +1,6 @@
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import numpy as np
 
 
 def scatter(plot):
@@ -66,4 +67,72 @@ def n_trace(plot):
     plot_div = fig.to_html(config=config, full_html=False,
                            div_id=f"plot_div_{plot.variable.id}", default_width="100%")
 
+    return plot_div
+
+
+def spectrogram(plot):
+    if plot.z_array is None or plot.y_axis_array is None or plot.x_field_array is None:
+        return "<div>No significant data for this period.</div>"
+
+    if len(plot.x_field_array) == 0 or len(plot.y_axis_array) == 0:
+        return "<div>No significant data for this period.</div>"
+
+    raw_z = np.array(plot.z_array, dtype=float)
+    if raw_z.size == 0:
+        return "<div>No significant data for this period.</div>"
+
+    color_z = np.where(raw_z > 0, np.log10(raw_z), np.nan)
+
+    finite_raw = raw_z[np.isfinite(raw_z) & (raw_z > 0)]
+    if finite_raw.size > 0:
+        min_pow = int(np.floor(np.log10(finite_raw.min())))
+        max_pow = int(np.ceil(np.log10(finite_raw.max())))
+        tickvals = list(range(min_pow, max_pow + 1))
+        ticktext = [f"1×10<sup>{p}</sup>" for p in tickvals]
+    else:
+        tickvals = None
+        ticktext = None
+
+    z_title = plot.variable.name
+    if plot.variable.units is not None:
+        if isinstance(plot.variable.units, list) and len(plot.variable.units) > 0:
+            z_title = f"{z_title}, {plot.variable.units[0]}"
+        elif isinstance(plot.variable.units, str) and plot.variable.units.strip():
+            z_title = f"{z_title}, {plot.variable.units}"
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            x=plot.x_field_array,
+            y=plot.y_axis_array,
+            z=color_z.T,
+            customdata=raw_z.T,
+            colorscale="Viridis",
+            connectgaps=False,
+            colorbar={
+                "title": z_title,
+                "tickvals": tickvals,
+                "ticktext": ticktext,
+            },
+            hovertemplate="x=%{x}<br>y=%{y}<br>z=%{customdata}<extra></extra>",
+        )
+    )
+
+    y_title = plot.variable.get_axis_label()
+    if plot.variable.depend_1 is not None:
+        dep1_var = plot.variable.dataset.variables.get_or_none(name=plot.variable.depend_1)
+        if dep1_var is not None:
+            y_title = dep1_var.get_axis_label()
+
+    fig.update_layout(
+        xaxis_range=[plot.t_start, plot.t_stop],
+        yaxis_title=y_title,
+    )
+
+    config = {"displayModeBar": False}
+    plot_div = fig.to_html(
+        config=config,
+        full_html=False,
+        div_id=f"plot_div_{plot.variable.id}",
+        default_width="100%",
+    )
     return plot_div

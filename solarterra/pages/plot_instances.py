@@ -5,7 +5,8 @@ from solarterra.utils import str_to_dt
 
 import math
 import datetime as dt
-from pages.figures import scatter, n_trace
+import numpy as np
+from pages.figures import scatter, n_trace, spectrogram
 
 
 class DBQuery():
@@ -58,12 +59,15 @@ class DBQuery():
         # if queryset is not completely empty
         if self.queryset.exists():
             rows = self.queryset.values_list(*self.all_fields)
-            pile = np.stack(rows)
-            print("PILE SHAPE", pile.shape)
-            # sort everythong by the first row
-            sorted_pile = pile[pile[:, 0].argsort()]
-            # transpose to form arrays
-            self.arrays = sorted_pile.T
+            sorted_rows = sorted(rows, key=lambda row: row[0])
+            columns = zip(*sorted_rows)
+            self.arrays = []
+            for col in columns:
+                contains_sequence = any(isinstance(value, (list, tuple, np.ndarray)) for value in col)
+                if contains_sequence:
+                    self.arrays.append(np.array(col, dtype=object))
+                else:
+                    self.arrays.append(np.array(col))
 
     def get_array_len(self):
         if self.arrays is not None:
@@ -146,6 +150,8 @@ class Plot():
         self.y_fields = list(variable.dynamic.order_by('multipart_index').values_list('field_name', flat=True))
         # a list of field arrays, in the same order as y_fields
         self.y_arrays = []
+        self.y_axis_array = None
+        self.z_array = None
         
         self.invalid_values = []
         
@@ -222,6 +228,85 @@ class Plot():
         # but there is a single x array and y arrays could have different validation indexes so i have to have multiple x_arrays or apply aggregation when plotting
         # chose the second option
 
+    def get_spectrogram_arrays(self, query):
+        self.get_x_array(query)
+
+        if len(self.y_fields) == 0:
+            self.z_array = np.array([])
+            self.y_axis_array = np.array([])
+            return
+
+        z_field = self.y_fields[0]
+        z_index = query.all_fields.index(z_field)
+        z_source = query.arrays[z_index]
+
+        dep1_values = None
+        if self.variable.depend_1 is not None:
+            depend_var = self.variable.dataset.variables.get_or_none(name=self.variable.depend_1)
+            if depend_var is not None and depend_var.dynamic.exists():
+                depend_fields = list(depend_var.dynamic.order_by('multipart_index').values_list('field_name', flat=True))
+                present_depend_fields = [field_name for field_name in depend_fields if field_name in query.all_fields]
+                if len(present_depend_fields) == 1:
+                    dep1_values = query.arrays[query.all_fields.index(present_depend_fields[0])]
+                elif len(present_depend_fields) > 1:
+                    try:
+                        dep1_values = np.array(
+                            [query.arrays[query.all_fields.index(field_name)][0] for field_name in present_depend_fields],
+                            dtype=float,
+                        )
+                    except Exception:
+                        dep1_values = None
+
+        y_axis = None
+        if dep1_values is not None:
+            if isinstance(dep1_values, np.ndarray) and dep1_values.ndim == 1 and dep1_values.size > 1:
+                if not isinstance(dep1_values[0], (list, tuple, np.ndarray)):
+                    y_axis = dep1_values.astype(float)
+
+            if y_axis is None:
+                for value in dep1_values:
+                    if isinstance(value, (list, tuple, np.ndarray)) and len(value) > 0:
+                        y_axis = np.array(value, dtype=float)
+                        break
+
+        rows = []
+        inferred_width = len(y_axis) if y_axis is not None else None
+
+        for value in z_source:
+            if isinstance(value, (list, tuple, np.ndarray)):
+                row = np.array(value, dtype=float)
+            else:
+                row = np.array([], dtype=float)
+
+            if inferred_width is None and row.size > 0:
+                inferred_width = row.size
+
+            rows.append(row)
+
+        if inferred_width is None:
+            self.z_array = np.array([])
+            self.y_axis_array = np.array([])
+            return
+
+        normalized_rows = []
+        for row in rows:
+            if row.size == inferred_width:
+                normalized_rows.append(row)
+            elif row.size == 0:
+                normalized_rows.append(np.full(inferred_width, np.nan))
+            elif row.size < inferred_width:
+                padded = np.full(inferred_width, np.nan)
+                padded[:row.size] = row
+                normalized_rows.append(padded)
+            else:
+                normalized_rows.append(row[:inferred_width])
+
+        self.z_array = np.vstack(normalized_rows) if len(normalized_rows) > 0 else np.array([])
+        if y_axis is None:
+            self.y_axis_array = np.arange(inferred_width)
+        else:
+            self.y_axis_array = y_axis
+
     def get_agg_x_array(self):
         self.x_field_array = np.array(list(map(it, self.bin_centers_array)))
 
@@ -269,6 +354,10 @@ class Plot():
             self.y_arrays.append(result)
         
     def set_arrays(self, query):
+        if self.variable.display_type == "spectrogram":
+            self.get_spectrogram_arrays(query)
+            return
+
         # includes validation
         if self.aggregation:
             self.get_agg_x_array()
@@ -294,9 +383,11 @@ class Plot():
 
 
     def get_figure(self):
-    
+        if self.variable.display_type == "spectrogram":
+            self.figure = spectrogram(self)
+            return
+
         if len(self.y_fields) == 1:
             self.figure = scatter(self)
         else:
             self.figure = n_trace(self)
-

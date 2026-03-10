@@ -18,28 +18,76 @@ def get_plots(variables, t_start, t_end, validate):
     bin_instance = Bin(t_start, t_end)
     plots = []
 
-    for item in variables.order_by('dataset__tag').distinct('dataset__tag', 'depend_0'):
+    for item in variables.order_by('dataset__tag', 'depend_0', 'display_type').distinct('dataset__tag', 'depend_0', 'display_type'):
 
         #print(item.dataset, item.depend_0)
-        vars_in_query = variables.filter(dataset=item.dataset, depend_0=item.depend_0).order_by('name')
+        vars_in_query = variables.filter(
+            dataset=item.dataset,
+            depend_0=item.depend_0,
+            display_type=item.display_type,
+        ).order_by('name')
 
         if item.depend_0 is None:
             print(f"No dependent axis specified for dataset '{item.dataset}', vars '{vars_in_query}'! Skipping")
             continue
         
         filter_field = item.get_depend_field().field_name
+
+        if item.display_type == "spectrogram":
+            for var in vars_in_query:
+                fields = list(var.dynamic.values_list("field_name", flat=True))
+                if len(fields) == 0:
+                    continue
+
+                if var.depend_1 is not None:
+                    depend_1_var = item.dataset.variables.get_or_none(name=var.depend_1)
+                    if depend_1_var is not None and depend_1_var.dynamic.exists():
+                        depend_1_fields = list(
+                            depend_1_var.dynamic.order_by("multipart_index").values_list("field_name", flat=True)
+                        )
+                        fields.extend(depend_1_fields)
+
+                query = DBQuery(
+                    dataset=item.dataset,
+                    filter_field=filter_field,
+                    t_start=t_start,
+                    t_stop=t_end,
+                    fields=fields,
+                )
+                query.query()
+                if query.queryset.exists():
+                    query.set_arrays()
+
+                plot = Plot(
+                    t_start=t_start,
+                    t_stop=t_end,
+                    variable=var,
+                    x_field=filter_field,
+                    validate=validate,
+                )
+                plot.aggregation = False
+
+                if query.queryset.exists():
+                    plot.set_arrays(query)
+
+                plot.get_figure()
+                plots.append(plot)
+
+            continue
+
         fields = list(DynamicField.objects.filter(variable_instance__in=vars_in_query).values_list('field_name', flat=True))
-    
+
         query = DBQuery(
-                dataset=item.dataset,
-                filter_field=filter_field,
-                t_start=t_start,
-                t_stop=t_end,
-                fields=fields)
-        
+            dataset=item.dataset,
+            filter_field=filter_field,
+            t_start=t_start,
+            t_stop=t_end,
+            fields=fields,
+        )
+
         # creating the query
-        query.query() 
-        # if queryset is not empty        
+        query.query()
+        # if queryset is not empty
         if query.queryset.exists():
             # queryset evaluation
             query.set_arrays()

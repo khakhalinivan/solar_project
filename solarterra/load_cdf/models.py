@@ -8,6 +8,7 @@ from solarterra.utils import NOW
 import os
 import numpy as np
 from django.core import management
+from django.db.models import Q
 
 
 #------ float32 tryout------------#
@@ -187,7 +188,11 @@ class Dataset(models.Model):
         self.save()
     
     def plottable_variables(self):
-        return self.variables.filter(var_logic_type="data", display_type="time_series").order_by('depend_0', 'name')
+        return self.variables.filter(
+            var_logic_type="data"
+        ).filter(
+            Q(display_type="time_series") | Q(display_type="spectrogram")
+        ).order_by('depend_0', 'name')
     
     def is_migrated(self):
         return self.dynamic.resolve_class() is not None
@@ -255,7 +260,12 @@ class VariableManager(GetManager):
     # same condition as in Dataset.plottable_variables(), make dataset relation manager on variable the same as this one
     def plottable(self):
         datasets = Dataset.objects.have_data()
-        return self.filter(dataset__in=datasets, var_logic_type="data", display_type="time_series").order_by('dataset__tag', 'name')
+        return self.filter(
+            dataset__in=datasets,
+            var_logic_type="data",
+        ).filter(
+            Q(display_type="time_series") | Q(display_type="spectrogram")
+        ).order_by('dataset__tag', 'name')
 
     def form_choices(self):
         return [(var.id, var.name) for var in self.plottable()]
@@ -334,10 +344,17 @@ class Variable(models.Model):
         return self.attributes.order_by('title')
 
     def get_axis_label(self, index=None):
-        label = self.lablaxis[index] if index is not None else self.lablaxis
+        if index is not None and isinstance(self.lablaxis, list):
+            label = self.lablaxis[index] if index < len(self.lablaxis) else self.name
+        elif isinstance(self.lablaxis, str):
+            label = self.lablaxis
+        else:
+            label = self.name
+
         if self.units is not None:
-            if index is not None and not isinstance(self.units, str):
-                label += f", {self.units[index]}"    
+            if index is not None and isinstance(self.units, list):
+                if index < len(self.units) and self.units[index] is not None:
+                    label += f", {self.units[index]}"
             else:
                 label += f", {self.units}"
 
@@ -503,6 +520,10 @@ class DataType(models.Model):
 
         else:
             try:
+                # Some integer fillvals come as strings like "65536.0".
+                # Parse via float first so int-like decimals are accepted.
+                if isinstance(proper_value, (int, np.integer)):
+                    return proper_value.__class__(float(value_str))
                 return proper_value.__class__(value_str)
 
             except Exception as e:
