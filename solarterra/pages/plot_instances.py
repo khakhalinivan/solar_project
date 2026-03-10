@@ -208,6 +208,101 @@ class Plot():
         else:
             return None
 
+    def validate_spectrogram(self):
+        if not self.validate:
+            return
+
+        if self.z_array is None or not isinstance(self.z_array, np.ndarray) or self.z_array.size == 0:
+            return
+
+        z = self.z_array
+        finite_mask = np.isfinite(z)
+
+        sample = 0.0
+        try:
+            finite_idx = np.flatnonzero(finite_mask)
+            if finite_idx.size > 0:
+                sample = float(z.flat[int(finite_idx[0])])
+        except Exception:
+            sample = 0.0
+
+        invalid_mask = np.zeros(z.shape, dtype=bool)
+        total = int(z.size)
+        counts = {
+            "nonfinite": int((~finite_mask).sum()),
+            "fill": 0,
+            "lt_min": 0,
+            "gt_max": 0,
+        }
+
+        if getattr(self.variable, "fillval", None) is not None:
+            try:
+                fill_value = DataType.proper_type(self.variable.fillval, sample)
+            except Exception:
+                fill_value = None
+            if fill_value is not None and not isinstance(fill_value, (list, tuple, np.ndarray, dict)):
+                fill_mask = finite_mask & (z == float(fill_value))
+                counts["fill"] = int(fill_mask.sum())
+                invalid_mask |= fill_mask
+
+        width = z.shape[1] if z.ndim == 2 else None
+        raw_validmin = getattr(self.variable, "validmin", None)
+        raw_validmax = getattr(self.variable, "validmax", None)
+
+        def parse_bound(raw):
+            if raw is None:
+                return None
+            try:
+                return DataType.proper_type(raw, sample)
+            except Exception:
+                return None
+
+        vmin_display = raw_validmin
+        vmax_display = raw_validmax
+
+        if isinstance(raw_validmin, list) and width is not None and len(raw_validmin) == width:
+            vmins = [parse_bound(v) for v in raw_validmin]
+            vmins = np.array([float(v) if v is not None else np.nan for v in vmins], dtype=float)
+            lt_mask = finite_mask & (z < vmins)
+            counts["lt_min"] = int(lt_mask.sum())
+            invalid_mask |= lt_mask
+            vmin_display = f"list(len={len(vmins)})"
+        else:
+            vmin = parse_bound(raw_validmin)
+            if vmin is not None and not isinstance(vmin, (list, tuple, np.ndarray, dict)):
+                lt_mask = finite_mask & (z < float(vmin))
+                counts["lt_min"] = int(lt_mask.sum())
+                invalid_mask |= lt_mask
+                vmin_display = vmin
+
+        if isinstance(raw_validmax, list) and width is not None and len(raw_validmax) == width:
+            vmaxs = [parse_bound(v) for v in raw_validmax]
+            vmaxs = np.array([float(v) if v is not None else np.nan for v in vmaxs], dtype=float)
+            gt_mask = finite_mask & (z > vmaxs)
+            counts["gt_max"] = int(gt_mask.sum())
+            invalid_mask |= gt_mask
+            vmax_display = f"list(len={len(vmaxs)})"
+        else:
+            vmax = parse_bound(raw_validmax)
+            if vmax is not None and not isinstance(vmax, (list, tuple, np.ndarray, dict)):
+                gt_mask = finite_mask & (z > float(vmax))
+                counts["gt_max"] = int(gt_mask.sum())
+                invalid_mask |= gt_mask
+                vmax_display = vmax
+
+        invalid_count = int(invalid_mask.sum())
+        self.invalid_values.append(
+            (
+                f"spectrogram validate: invalid={invalid_count}/{total}, "
+                f"nonfinite={counts['nonfinite']}, fill={counts['fill']}, "
+                f"<min={counts['lt_min']}, >max={counts['gt_max']}, "
+                f"validmin={vmin_display}, validmax={vmax_display}"
+            )
+        )
+
+        if invalid_count:
+            z[invalid_mask] = np.nan
+
 
     def get_x_array(self, query):
         self.x_field_array = np.array(list(map(it, query.get_full_time_array())))
@@ -306,6 +401,7 @@ class Plot():
             self.y_axis_array = np.arange(inferred_width)
         else:
             self.y_axis_array = y_axis
+        self.validate_spectrogram()
 
     def get_agg_x_array(self):
         self.x_field_array = np.array(list(map(it, self.bin_centers_array)))
