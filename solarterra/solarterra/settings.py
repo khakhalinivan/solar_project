@@ -34,6 +34,7 @@ MODEL_DIR_PATH = os.path.join(SUB_PATH, 'data_cdf/models')
 sys.path.append(SUB_PATH)
 
 MODEL_POSTFIX = "_data"
+SAVE_DATA_USE_RAW_INSERT = True
 
 
 # Quick-start development settings - unsuitable for production

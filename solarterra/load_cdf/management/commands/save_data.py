@@ -12,31 +12,64 @@ import math
 import numpy as np
 from .evaluate_extras import command_logger, UploadRequired
 from itertools import zip_longest
+from django.db import connection
 
 
 def save_single_file(cdf_file, fields, model_class, upload):
 
+    t_total_start = timeit.default_timer()
+    t_open_start = timeit.default_timer()
     cdf_obj = pycdf.CDF(cdf_file.full_path)
+    t_open = timeit.default_timer() - t_open_start
     #print(cdf_file.full_path)
     arr_collection = []
     field_labels = []
     array_field_labels = set()
+    fields_total = 0
+    fields_with_data = 0
+    fields_empty = 0
+    empty_fields = []
+    t_read = 0.0
+    t_prepare = 0.0
     
     # numpy array work only
     for field in fields:
+        fields_total += 1
         var = field.variable_instance
         #print(var.name, field.field_name)
+        t_read_start = timeit.default_timer()
         if field.storage_mode == DynamicField.STORAGE_ARRAY:
             arr = cdf_obj[var.name][...]
         elif not field.multipart:
             arr = cdf_obj[var.name][...]
         else:
-            #print(f"multipart: dims {var.dims}, dim_sizes {var.dim_sizes}, dim index {field.multipart_index - 1}")
-            arr = cdf_obj[var.name][:, field.multipart_index - 1]
+            # multipart can be either (records, parts) or a plain 1D array of parts
+            raw = cdf_obj[var.name][...]
+            part_index = field.multipart_index - 1
+
+            if isinstance(raw, np.ndarray) and raw.ndim >= 2:
+                #print(f"multipart: dims {var.dims}, dim_sizes {var.dim_sizes}, dim index {part_index}")
+                arr = raw[:, part_index]
+            elif isinstance(raw, np.ndarray) and raw.ndim == 1:
+                if part_index >= raw.shape[0]:
+                    make_log_entry(
+                        f"multipart index {field.multipart_index} out of range for variable '{var.name}' with shape {raw.shape}",
+                        "WARNING",
+                        upload=upload,
+                    )
+                    continue
+                arr = np.array([raw[part_index]])
+            else:
+                arr = np.array([raw])
+        t_read += timeit.default_timer() - t_read_start
         
+        t_prepare_start = timeit.default_timer()
         if len(arr) == 0:
-            make_log_entry(f"file '{cdf_file.full_path}' field '{field.field_name}' variable '{var.name}' contains no data", "WARNING", upload=upload)
+            fields_empty += 1
+            empty_fields.append((field.field_name, var.name))
+            t_prepare += timeit.default_timer() - t_prepare_start
             continue
+        fields_with_data += 1
             
         # there is no None numpy value for int types, and nan is a float
         # constructing python arrays will take up a lot more memory and time
@@ -103,13 +136,15 @@ def save_single_file(cdf_file, fields, model_class, upload):
         field_labels.append(field.field_name)
         if field.storage_mode == DynamicField.STORAGE_ARRAY:
             array_field_labels.add(field.field_name)
+        t_prepare += timeit.default_timer() - t_prepare_start
     
     
 
     # zip by longest array instead of shrotest as in classic zip
     # only needed here as temporary solution for different depend fields (epochs) with different lengths
+    t_rows_start = timeit.default_timer()
     zipped_collection = zip_longest(*arr_collection)
-    instances = []
+    insert_rows = []
    
     
     for collection_row in zipped_collection:
@@ -122,17 +157,72 @@ def save_single_file(cdf_file, fields, model_class, upload):
                 row_values[field_label] = value.tolist()
             elif isinstance(value, tuple):
                 row_values[field_label] = list(value)
-        instances.append(model_class(cdf_file=cdf_file, **row_values))
+        row_values["cdf_file_id"] = cdf_file.id
+        insert_rows.append(row_values)
+    t_rows = timeit.default_timer() - t_rows_start
     
-    
-    model_class.objects.bulk_create(instances)
-    cdf_file.update(loaded=True, saved_rows=len(instances)) 
-    print(len(instances)) 
+    t_insert_start = timeit.default_timer()
+    use_raw_insert = getattr(settings, "SAVE_DATA_USE_RAW_INSERT", True)
+    if use_raw_insert and len(insert_rows) > 0:
+        table_name = model_class._meta.db_table
+        columns = list(field_labels) + ["cdf_file_id"]
+        required_cols = set(columns)
+        for row_index, row in enumerate(insert_rows):
+            missing_cols = [col for col in columns if col not in row]
+            extra_cols = set(row.keys()) - required_cols
+            if missing_cols or extra_cols:
+                make_log_entry(
+                    (
+                        f"Row shape mismatch before raw insert for file '{cdf_file.full_path}', row {row_index}: "
+                        f"missing={missing_cols}, extra={sorted(extra_cols)}"
+                    ),
+                    "ERROR",
+                    upload=upload,
+                )
+                exit(1)
+
+        placeholders = ", ".join(["%s"] * len(columns))
+        col_sql = ", ".join([f"\"{col}\"" for col in columns])
+        sql = f"INSERT INTO \"{table_name}\" ({col_sql}) VALUES ({placeholders})"
+        values = [tuple(row.get(col) for col in columns) for row in insert_rows]
+        with connection.cursor() as cursor:
+            cursor.executemany(sql, values)
+    elif len(insert_rows) > 0:
+        instances = [model_class(**row) for row in insert_rows]
+        model_class.objects.bulk_create(instances, batch_size=2000)
+        del instances
+
+    cdf_file.update(loaded=True, saved_rows=len(insert_rows)) 
+    t_insert = timeit.default_timer() - t_insert_start
+    print(len(insert_rows)) 
     del arr_collection
     del zipped_collection
-    del instances
+    del insert_rows
     
     cdf_obj.close()
+
+    if fields_empty > 0:
+        preview = ", ".join([f"{f}/{v}" for f, v in empty_fields[:8]])
+        if fields_empty > 8:
+            preview += ", ..."
+        make_log_entry(
+            f"file '{cdf_file.full_path}' has {fields_empty} empty fields: {preview}",
+            "WARNING",
+            upload=upload,
+        )
+
+    t_total = timeit.default_timer() - t_total_start
+    make_log_entry(
+        (
+            f"profile save_single_file '{cdf_file.full_path}': "
+            f"fields total={fields_total}, with_data={fields_with_data}, empty={fields_empty}, "
+            f"rows={cdf_file.saved_rows}; "
+            f"timings sec open={t_open:.4f}, read={t_read:.4f}, prepare={t_prepare:.4f}, "
+            f"rows={t_rows:.4f}, insert={t_insert:.4f}, total={t_total:.4f}"
+        ),
+        "INFO",
+        upload=upload,
+    )
 
 class Command(UploadRequired, BaseCommand):
 
