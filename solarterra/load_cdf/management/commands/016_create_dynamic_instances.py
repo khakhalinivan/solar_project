@@ -82,9 +82,15 @@ class Command(UploadRequired, BaseCommand):
                     ))
                     make_log_entry(f"Added array dynamic field '{dmi.df_list[-1]}' for spectrogram variable '{variable.name}'", upload=upload)
                 else:
+                    labels = variable.lablaxis if isinstance(variable.lablaxis, list) else None
                     for index in range(variable.dim_sizes):
-                        # taking parts of separate field names from the lablaxis property
-                        field_name = variable.name + '_' + variable.lablaxis[index].strip()
+                        # Prefer labels from LABLAXIS, fallback to stable synthetic names.
+                        if labels and index < len(labels) and labels[index]:
+                            suffix = str(labels[index]).strip()
+                        else:
+                            suffix = f"part_{index + 1}"
+
+                        field_name = f"{variable.name}_{suffix}"
                         safe_field_name = safe_str(field_name)
                         #print(f"\t'{field_name}'  normal field_name '{safe_field_name}'")
                         dmi.df_list.append(DynamicField(

@@ -48,7 +48,26 @@ class Command(UploadRequired, BaseCommand):
                     make_log_entry(f"When parsing matchfile variable '{var_name}: {e}'", "ERROR", upload=upload)
 
                 # set attribute value
-                setattr(var_instance, var_field, var_attr_dict['value'])
+                raw_value = var_attr_dict['value']
+
+                # Backward compatibility for MF_DEPEND represented as [DEPEND_0, DEPEND_1].
+                if json_var_attr == "MF_DEPEND":
+                    if isinstance(raw_value, list):
+                        if len(raw_value) > 0:
+                            var_instance.depend_0 = raw_value[0]
+                        if len(raw_value) > 1:
+                            var_instance.depend_1 = raw_value[1]
+                    elif isinstance(raw_value, str):
+                        var_instance.depend_0 = raw_value
+                    else:
+                        make_log_entry(
+                            f"Unsupported MF_DEPEND format for variable '{var_name}': {type(raw_value)}",
+                            "WARNING",
+                            upload=upload,
+                        )
+                    continue
+
+                setattr(var_instance, var_field, raw_value)
 
                 # find the var attr instance
                 v_attr_name = var_attr_dict['vattribute_name']
@@ -68,5 +87,4 @@ class Command(UploadRequired, BaseCommand):
             except Exception as e:
                 make_log_entry(f"On updating Variable instance '{var_name}' : {e}", "ERROR", upload=upload)
                 upload.terminate()
-
 
