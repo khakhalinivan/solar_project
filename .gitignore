@@ -12,3 +12,24 @@ __pycache__/
 
 # Файлы с секретами (никогда не коммитить!)
 ./configs/settings.json
+
+# Данные
+solarterra/data/
+
+# Примеры данных
+examples/
+
+# Миграции
+solarterra_submodules/data_cdf/migrations/
+
+# Модели данных
+solarterra_submodules/data_cdf/models
+
+# Тесты
+solarterra/load_cdf/tests
+
+# Миграции для загрузки CDF
+solarterra/load_cdf/migrations
+
+# Логи
+solarterra/logs
