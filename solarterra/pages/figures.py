@@ -94,11 +94,9 @@ def spectrogram(plot):
         ticktext = None
 
     z_title = plot.variable.name
-    if plot.variable.units is not None:
-        if isinstance(plot.variable.units, list) and len(plot.variable.units) > 0:
-            z_title = f"{z_title}, {plot.variable.units[0]}"
-        elif isinstance(plot.variable.units, str) and plot.variable.units.strip():
-            z_title = f"{z_title}, {plot.variable.units}"
+    z_unit = plot.variable.get_unit_label()
+    if z_unit:
+        z_title = f"{z_title}, {z_unit}"
 
     fig = go.Figure(
         data=go.Heatmap(
@@ -113,7 +111,7 @@ def spectrogram(plot):
                 "tickvals": tickvals,
                 "ticktext": ticktext,
             },
-            hovertemplate="x=%{x}<br>y=%{y}<br>z=%{customdata}<extra></extra>",
+            hovertemplate="x=%{x}<br>y=%{y}<br>z=%{customdata:.3e}<extra></extra>",
         )
     )
 

@@ -1,6 +1,7 @@
 from django.db import models
 import uuid
 import datetime
+import re
 from solarterra.abstract_models import GetManager
 from django.apps import apps
 from django.conf import settings
@@ -343,6 +344,71 @@ class Variable(models.Model):
     def ordered_attributes(self):
         return self.attributes.order_by('title')
 
+    @staticmethod
+    def normalize_unit(unit_value):
+        if unit_value is None:
+            return ""
+
+        unit = str(unit_value).strip()
+        if not unit:
+            return ""
+
+        unit = unit.replace("#", "").strip()
+        if not unit:
+            return ""
+
+        if len(unit) >= 2 and ((unit[0] == "[" and unit[-1] == "]") or (unit[0] == "(" and unit[-1] == ")")):
+            unit = unit[1:-1].strip()
+
+        if "/" in unit:
+            parts = [p.strip() for p in unit.split("/") if p.strip()]
+            if len(parts) > 1:
+                numerator = parts[0]
+                denominator_parts = parts[1:]
+                counts = {}
+                order = []
+                for part in denominator_parts:
+                    if part not in counts:
+                        counts[part] = 0
+                        order.append(part)
+                    counts[part] += 1
+
+                formatted_parts = []
+                if numerator and numerator != "1":
+                    formatted_parts.append(numerator)
+                for part in order:
+                    power = counts[part]
+                    if power == 1:
+                        formatted_parts.append(f"{part}<sup>-1</sup>")
+                    else:
+                        formatted_parts.append(f"{part}<sup>-{power}</sup>")
+                if formatted_parts:
+                    unit = "·".join(formatted_parts)
+
+        unit = re.sub(r"\*\*([+-]?\d+)", r"<sup>\1</sup>", unit)
+        unit = re.sub(r"\^([+-]?\d+)", r"<sup>\1</sup>", unit)
+        unit = re.sub(r"(?<=[A-Za-z\)])([+-]\d+)", r"<sup>\1</sup>", unit)
+
+        return unit
+
+    def get_unit_label(self, index=None):
+        if self.units is None:
+            return ""
+
+        if isinstance(self.units, list):
+            if index is not None:
+                if index < len(self.units):
+                    return self.normalize_unit(self.units[index])
+                return ""
+
+            for unit_candidate in self.units:
+                unit = self.normalize_unit(unit_candidate)
+                if unit:
+                    return unit
+            return ""
+
+        return self.normalize_unit(self.units)
+
     def get_axis_label(self, index=None):
         if index is not None and isinstance(self.lablaxis, list):
             label = self.lablaxis[index] if index < len(self.lablaxis) else self.name
@@ -351,12 +417,9 @@ class Variable(models.Model):
         else:
             label = self.name
 
-        if self.units is not None:
-            if index is not None and isinstance(self.units, list):
-                if index < len(self.units) and self.units[index] is not None:
-                    label += f", {self.units[index]}"
-            else:
-                label += f", {self.units}"
+        unit_label = self.get_unit_label(index)
+        if unit_label:
+            label += f", {unit_label}"
 
         return label
 
