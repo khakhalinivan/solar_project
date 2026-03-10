@@ -81,7 +81,10 @@ def spectrogram(plot):
     if raw_z.size == 0:
         return "<div>No significant data for this period.</div>"
 
-    color_z = np.where(raw_z > 0, np.log10(raw_z), np.nan)
+    pos_mask = raw_z > 0
+    color_z = np.full(raw_z.shape, np.nan, dtype=float)
+    if pos_mask.any():
+        color_z[pos_mask] = np.log10(raw_z[pos_mask])
 
     finite_raw = raw_z[np.isfinite(raw_z) & (raw_z > 0)]
     if finite_raw.size > 0:
