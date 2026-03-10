@@ -20,12 +20,15 @@ def save_single_file(cdf_file, fields, model_class, upload):
     #print(cdf_file.full_path)
     arr_collection = []
     field_labels = []
+    array_field_labels = set()
     
     # numpy array work only
     for field in fields:
         var = field.variable_instance
         #print(var.name, field.field_name)
-        if not field.multipart:
+        if field.storage_mode == DynamicField.STORAGE_ARRAY:
+            arr = cdf_obj[var.name][...]
+        elif not field.multipart:
             arr = cdf_obj[var.name][...]
         else:
             #print(f"multipart: dims {var.dims}, dim_sizes {var.dim_sizes}, dim index {field.multipart_index - 1}")
@@ -59,7 +62,16 @@ def save_single_file(cdf_file, fields, model_class, upload):
         # variable fillvals can differ from standard ones for the type: 017 command checks that
         # also fillval can change on the file level: #TODO add cdf file FILL_VAL and PAD_VALUE parsing here
         if var.fillval is not None:
-            fill_value = DataType.proper_type(var.fillval, arr[0])
+            if isinstance(arr, np.ndarray):
+                # For array-valued variables (e.g. spectrograms), use a scalar sample value for type conversion.
+                if arr.size == 0:
+                    make_log_entry(f"file '{cdf_file.full_path}' field '{field.field_name}' variable '{var.name}' contains an empty ndarray", "WARNING", upload=upload)
+                    continue
+                sample_value = arr.flat[0]
+            else:
+                sample_value = arr[0]
+
+            fill_value = DataType.proper_type(var.fillval, sample_value)
             #print(f"FILL {fill_value}: {len(arr[arr==fill_value])} / {arr.shape}")
             #print("added fillval condition", var.fillval, type(arr[0]), fill_value, type(fill_value))
             if fill_value is None:
@@ -77,7 +89,7 @@ def save_single_file(cdf_file, fields, model_class, upload):
             arr[condition] = swap_value
         
         if 'float' in str(arr.dtype):
-            nan_count = np.isnan(arr).sum(0)
+            nan_count = np.isnan(arr).sum()
             if nan_count > 0:
                 make_log_entry(f"{nan_count} invalid values in '{field.field_name}' file '{cdf_file.full_path}'")
         
@@ -89,6 +101,8 @@ def save_single_file(cdf_file, fields, model_class, upload):
 
         # add attribute name for arrays with only non-zero entry counts
         field_labels.append(field.field_name)
+        if field.storage_mode == DynamicField.STORAGE_ARRAY:
+            array_field_labels.add(field.field_name)
     
     
 
@@ -100,6 +114,14 @@ def save_single_file(cdf_file, fields, model_class, upload):
     
     for collection_row in zipped_collection:
         row_values = dict(zip(field_labels, collection_row))
+        for field_label in array_field_labels:
+            value = row_values.get(field_label)
+            if value is None:
+                continue
+            if isinstance(value, np.ndarray):
+                row_values[field_label] = value.tolist()
+            elif isinstance(value, tuple):
+                row_values[field_label] = list(value)
         instances.append(model_class(cdf_file=cdf_file, **row_values))
     
     

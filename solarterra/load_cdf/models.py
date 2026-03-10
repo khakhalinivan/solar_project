@@ -289,6 +289,7 @@ class Variable(models.Model):
     catdesc = models.CharField(max_length=200, blank=True, null=True)
     var_notes = models.TextField(blank=True, null=True)
     depend_0 = models.CharField(max_length=200, blank=True, null=True)
+    depend_1 = models.CharField(max_length=200, blank=True, null=True)
     display_type = models.CharField(max_length=200, blank=True, null=True)
     scaletyp = models.CharField(max_length=200, blank=True, null=True)
     # data, meta_data or support_data 
@@ -414,6 +415,12 @@ class DynamicModel(models.Model):
 
 
 class DynamicField(models.Model):
+    STORAGE_SCALAR = "scalar"
+    STORAGE_ARRAY = "array"
+    STORAGE_CHOICES = [
+        (STORAGE_SCALAR, "Scalar"),
+        (STORAGE_ARRAY, "Array"),
+    ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
@@ -432,6 +439,7 @@ class DynamicField(models.Model):
     dynamic_model = models.ForeignKey("DynamicModel", on_delete=models.CASCADE, related_name="fields")
 
     data_type_instance = models.ForeignKey('DataType', related_name="fields", on_delete=models.SET_NULL, blank=True, null=True)
+    storage_mode = models.CharField(max_length=20, choices=STORAGE_CHOICES, default=STORAGE_SCALAR)
 
     objects = GetManager()
 
@@ -549,4 +557,3 @@ def make_log_entry(message, code=None, upload=None, color=None):
 
     if upload is not None:
         to_db(upload, code, message)
-

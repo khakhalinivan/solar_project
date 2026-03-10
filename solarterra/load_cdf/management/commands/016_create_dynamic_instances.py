@@ -55,6 +55,7 @@ class Command(UploadRequired, BaseCommand):
                 dmi.df_list.append(DynamicField(
                     field_name=safe_str(variable.name),
                     multipart=False,
+                    storage_mode=DynamicField.STORAGE_SCALAR,
                     variable_instance=variable,
                     dynamic_model=dmi
                 ))
@@ -63,19 +64,38 @@ class Command(UploadRequired, BaseCommand):
                 if variable.dim_sizes is None:
                     make_log_entry(f"Variable '{variable.name}' with dims = {variable.dims} does not have dim_sizes set", "ERROR", upload=upload)
                     upload.terminate()
-                for index in range(variable.dim_sizes):
-                    # taking parts of separate field names from the lablaxis property
-                    field_name = variable.name + '_' + variable.lablaxis[index].strip()
-                    safe_field_name = safe_str(field_name)
-                    #print(f"\t'{field_name}'  normal field_name '{safe_field_name}'")
+                if variable.display_type == "spectrogram":
+                    if variable.depend_1 is None:
+                        make_log_entry(f"Spectrogram variable '{variable.name}' has no DEPEND_1 mapping in matchfile fields.", "ERROR", upload=upload)
+                        upload.terminate()
+                    depend_var = dataset.variables.get_or_none(name=variable.depend_1)
+                    if depend_var is None:
+                        make_log_entry(f"Spectrogram variable '{variable.name}' depends on '{variable.depend_1}', but this variable does not exist in dataset '{dataset.tag}'.", "ERROR", upload=upload)
+                        upload.terminate()
+
                     dmi.df_list.append(DynamicField(
-                        field_name=safe_field_name,
-                        multipart=True,
-                        multipart_index=index + 1,
+                        field_name=safe_str(variable.name),
+                        multipart=False,
+                        storage_mode=DynamicField.STORAGE_ARRAY,
                         variable_instance=variable,
                         dynamic_model=dmi
                     ))
-                    make_log_entry(f"Added dynamic field '{safe_field_name}' for variable '{variable.name}'", upload=upload)
+                    make_log_entry(f"Added array dynamic field '{dmi.df_list[-1]}' for spectrogram variable '{variable.name}'", upload=upload)
+                else:
+                    for index in range(variable.dim_sizes):
+                        # taking parts of separate field names from the lablaxis property
+                        field_name = variable.name + '_' + variable.lablaxis[index].strip()
+                        safe_field_name = safe_str(field_name)
+                        #print(f"\t'{field_name}'  normal field_name '{safe_field_name}'")
+                        dmi.df_list.append(DynamicField(
+                            field_name=safe_field_name,
+                            multipart=True,
+                            storage_mode=DynamicField.STORAGE_SCALAR,
+                            multipart_index=index + 1,
+                            variable_instance=variable,
+                            dynamic_model=dmi
+                        ))
+                        make_log_entry(f"Added dynamic field '{safe_field_name}' for variable '{variable.name}'", upload=upload)
             else:
                 make_log_entry(f"Number of dimensions '{variable.dims}' in '{variable.name}' is not supported yet, skipping field creation", "WARNING", upload=upload)
                 continue
@@ -83,6 +103,3 @@ class Command(UploadRequired, BaseCommand):
         DynamicField.objects.bulk_create(dmi.df_list)
         make_log_entry(f"Saved {dmi.fields.count()} data fields for model {dmi.model_name}", "CREATED", upload=upload)
         del dmi.df_list
-
-
-

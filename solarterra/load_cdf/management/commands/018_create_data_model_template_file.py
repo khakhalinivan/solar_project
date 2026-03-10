@@ -2,8 +2,7 @@ from django.core.management.base import BaseCommand
 import os
 from django.template.loader import render_to_string
 from load_cdf.models import *
-# from load_cdf.utils import *
-from load_cdf.utils import safe_str
+from load_cdf.rendering import build_rendered_fields
 from .evaluate_extras import command_logger, UploadRequired
 
 class Command(UploadRequired, BaseCommand):
@@ -31,12 +30,17 @@ class Command(UploadRequired, BaseCommand):
             exit(0)
 
         
-        content = render_to_string('model.tpl', context={ 'dm_instance' : dynamic_model })
+        content = render_to_string(
+            "model.tpl",
+            context={
+                "dm_instance": dynamic_model,
+                "rendered_fields": build_rendered_fields(dynamic_model),
+            },
+        )
 
         with open(dynamic_model.model_file_path, "w+") as model_file:
             model_file.write(content)
 
         make_log_entry(f"Saved data model template file '{dynamic_model.model_file_path}'", "SUCCESS", upload=upload)
-
 
 
