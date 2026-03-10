@@ -1,0 +1,14 @@
+# Виртуальное окружение
+solar_venv/
+.env
+
+# Кэш Python
+__pycache__/
+*.pyc
+
+# Базы данных
+*.sqlite3
+*.db
+
+# Файлы с секретами (никогда не коммитить!)
+./configs/settings.json
