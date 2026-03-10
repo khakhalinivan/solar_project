@@ -15,9 +15,27 @@ from itertools import zip_longest
 from django.db import connection
 
 
+def format_duration(seconds: float) -> str:
+    if seconds is None:
+        return "n/a"
+    seconds = max(0.0, float(seconds))
+    whole = int(seconds)
+    ms = int(round((seconds - whole) * 1000))
+    m, s = divmod(whole, 60)
+    h, m = divmod(m, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+
+
 def save_single_file(cdf_file, fields, model_class, upload):
 
     t_total_start = timeit.default_timer()
+    if not os.path.exists(cdf_file.full_path):
+        make_log_entry(
+            f"CDF file does not exist on disk: '{cdf_file.full_path}'",
+            "ERROR",
+            upload=upload,
+        )
+        exit(1)
     t_open_start = timeit.default_timer()
     cdf_obj = pycdf.CDF(cdf_file.full_path)
     t_open = timeit.default_timer() - t_open_start
@@ -240,6 +258,19 @@ def save_single_file(cdf_file, fields, model_class, upload):
         upload=upload,
     )
 
+    return {
+        "rows": int(cdf_file.saved_rows or 0),
+        "fields_total": int(fields_total),
+        "fields_with_data": int(fields_with_data),
+        "fields_empty": int(fields_empty),
+        "t_open": float(t_open),
+        "t_read": float(t_read),
+        "t_prepare": float(t_prepare),
+        "t_rows": float(t_rows),
+        "t_insert": float(t_insert),
+        "t_total": float(t_total),
+    }
+
 class Command(UploadRequired, BaseCommand):
 
     help = "Command to load all data from the saved cdf files."
@@ -293,26 +324,76 @@ class Command(UploadRequired, BaseCommand):
         file_count = cdf_files.count()
         percent = 0
         deltas = []
+        t_run_start = timeit.default_timer()
+        processed_files = 0
+        skipped_files = 0
+        total_rows = 0
+        phase_sums = {
+            "t_open": 0.0,
+            "t_read": 0.0,
+            "t_prepare": 0.0,
+            "t_rows": 0.0,
+            "t_insert": 0.0,
+            "t_total": 0.0,
+        }
 
 
         for index, cdf_file in enumerate(cdf_files):
             if cdf_file.loaded:
                 make_log_entry(f"File '{cdf_file.full_path}' is supposed to be loaded with {cdf_file.saved_rows}, skipping", upload=upload)
+                skipped_files += 1
                 continue
             t1 = timeit.default_timer() 
-            save_single_file(cdf_file, fields, model_class, upload)
+            metrics = save_single_file(cdf_file, fields, model_class, upload)
             t2 = timeit.default_timer() 
-            deltas.append(t2 - t1)
+            delta = t2 - t1
+            deltas.append(delta)
+            processed_files += 1
+            if metrics:
+                total_rows += metrics.get("rows", 0)
+                for key in phase_sums.keys():
+                    phase_sums[key] += metrics.get(key, 0.0)
 
-            current_percent = math.floor(index / file_count * 100)
+            current_percent = math.floor((index + 1) / file_count * 100)
             
             if current_percent > percent:
-                make_log_entry(f"{current_percent}% done, {index + 1} files uploaded, total time {round(sum(deltas), 5)}, avg time per file {round(sum(deltas) / len(deltas), 5)}", upload=upload)
-                print(f"{current_percent}% done, {index + 1} files uploaded, total time {round(sum(deltas), 5)}, avg time per file {round(sum(deltas) / len(deltas), 5)}")
+                elapsed = timeit.default_timer() - t_run_start
+                avg = (sum(deltas) / len(deltas)) if deltas else 0.0
+                remaining = max(0, file_count - (index + 1))
+                eta = avg * remaining if avg > 0 else None
+                msg = (
+                    f"{current_percent}% done; "
+                    f"processed={processed_files}, skipped={skipped_files}, total={index + 1}/{file_count}; "
+                    f"elapsed={format_duration(elapsed)}"
+                )
+                if deltas:
+                    msg += f", avg/file={format_duration(avg)}"
+                if eta is not None:
+                    msg += f", ETA≈{format_duration(eta)}"
+                make_log_entry(msg, upload=upload)
+                print(msg)
                 percent = current_percent
 
+        elapsed_total = timeit.default_timer() - t_run_start
+        if deltas:
+            arr = np.array(deltas, dtype=float)
+            avg = float(arr.mean())
+            median = float(np.median(arr))
+            p95 = float(np.percentile(arr, 95))
+        else:
+            avg = median = p95 = 0.0
+
+        summary = (
+            f"Upload finished: processed={processed_files}, skipped={skipped_files}, files_total={file_count}, rows_total={total_rows}; "
+            f"elapsed={format_duration(elapsed_total)}; "
+            f"per_file avg={format_duration(avg)}, median={format_duration(median)}, p95={format_duration(p95)}; "
+            f"phase_sums sec open={phase_sums['t_open']:.3f}, read={phase_sums['t_read']:.3f}, prepare={phase_sums['t_prepare']:.3f}, "
+            f"rows={phase_sums['t_rows']:.3f}, insert={phase_sums['t_insert']:.3f}, total={phase_sums['t_total']:.3f}"
+        )
+        make_log_entry(summary, "SUCCESS", upload=upload)
+        print(summary)
 
 
 
-
+    
     
