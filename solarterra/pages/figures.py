@@ -3,6 +3,23 @@ from plotly.subplots import make_subplots
 import numpy as np
 
 
+COMMON_MARGIN = {"l": 85, "r": 30, "t": 25, "b": 60}
+COMMON_X_DOMAIN = [0.0, 0.86]
+
+
+def apply_common_time_axis(fig, plot):
+    fig.update_xaxes(
+        range=[plot.t_start, plot.t_stop],
+        domain=COMMON_X_DOMAIN,
+        automargin=False,
+    )
+    fig.update_yaxes(automargin=False)
+    fig.update_layout(
+        margin=COMMON_MARGIN,
+        margin_autoexpand=False,
+    )
+
+
 def scatter(plot):
 
     if len(plot.y_arrays) == 0 or len(plot.y_arrays[0]) == 0:
@@ -17,9 +34,9 @@ def scatter(plot):
 
     fig.update_traces(connectgaps=False, marker=dict(size=4))
     fig.update_layout(
-        xaxis_range=[plot.t_start, plot.t_stop],
         yaxis_title=plot.variable.get_axis_label(),
     )
+    apply_common_time_axis(fig, plot)
 
 
     fig.update_yaxes(type=plot.variable.scaletyp)
@@ -62,6 +79,7 @@ def n_trace(plot):
         #xaxis_range=[ts[0], ts[1]],
         showlegend=False,
     )
+    apply_common_time_axis(fig, plot)
 
     config = {'displayModeBar': False}
     plot_div = fig.to_html(config=config, full_html=False,
@@ -113,6 +131,9 @@ def spectrogram(plot):
                 "title": z_title,
                 "tickvals": tickvals,
                 "ticktext": ticktext,
+                "x": 0.9,
+                "xanchor": "left",
+                "thickness": 18,
             },
             hovertemplate="x=%{x}<br>y=%{y}<br>z=%{customdata:.3e}<extra></extra>",
         )
@@ -125,9 +146,9 @@ def spectrogram(plot):
             y_title = dep1_var.get_axis_label()
 
     fig.update_layout(
-        xaxis_range=[plot.t_start, plot.t_stop],
         yaxis_title=y_title,
     )
+    apply_common_time_axis(fig, plot)
 
     config = {"displayModeBar": False}
     plot_div = fig.to_html(
