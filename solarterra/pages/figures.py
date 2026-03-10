@@ -104,7 +104,7 @@ def spectrogram(plot):
             y=plot.y_axis_array,
             z=color_z.T,
             customdata=raw_z.T,
-            colorscale="Viridis",
+            colorscale="Rainbow",
             connectgaps=False,
             colorbar={
                 "title": z_title,
