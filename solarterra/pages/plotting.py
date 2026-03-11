@@ -57,6 +57,9 @@ def get_plots(variables, t_start, t_end, validate):
                 query.query()
                 if query.queryset.exists():
                     query.set_arrays()
+                    aggregation = True if query.get_array_len() > Bin.PPP else False
+                else:
+                    aggregation = False
 
                 plot = Plot(
                     t_start=t_start,
@@ -65,9 +68,12 @@ def get_plots(variables, t_start, t_end, validate):
                     x_field=filter_field,
                     validate=validate,
                 )
-                plot.aggregation = False
+                plot.aggregation = aggregation
 
                 if query.queryset.exists():
+                    if aggregation:
+                        plot.prepare_bins(bin_instance)
+                        query.set_bin_map(plot.bin_starts_array)
                     plot.set_arrays(query)
 
                 plot.get_figure()
