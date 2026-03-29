@@ -323,6 +323,75 @@ class Plot():
         # but there is a single x array and y arrays could have different validation indexes so i have to have multiple x_arrays or apply aggregation when plotting
         # chose the second option
 
+    def _is_usable_spectrogram_axis(self, candidate, expected_width=None):
+        if candidate is None:
+            return False
+
+        axis = np.asarray(candidate, dtype=float)
+        if axis.ndim != 1 or axis.size == 0:
+            return False
+
+        if expected_width is not None and axis.size != expected_width:
+            return False
+
+        return np.isfinite(axis).any()
+
+    def _extract_spectrogram_y_axis(self, query, expected_width):
+        if not self.variable.depend_1:
+            return None
+
+        depend_var = self.variable.dataset.variables.get_or_none(name=self.variable.depend_1)
+        if depend_var is None or not depend_var.dynamic.exists():
+            return None
+
+        depend_fields = list(depend_var.dynamic.order_by("multipart_index").values_list("field_name", flat=True))
+        present_depend_fields = [field_name for field_name in depend_fields if field_name in query.all_fields]
+
+        if len(present_depend_fields) == 0:
+            return None
+
+        if len(present_depend_fields) == 1:
+            dep1_values = query.arrays[query.all_fields.index(present_depend_fields[0])]
+
+            try:
+                candidate = np.asarray(dep1_values, dtype=float)
+            except Exception:
+                candidate = None
+
+            if self._is_usable_spectrogram_axis(candidate, expected_width=expected_width):
+                return candidate
+
+            for value in dep1_values:
+                if not isinstance(value, (list, tuple, np.ndarray)) or len(value) == 0:
+                    continue
+
+                try:
+                    candidate = np.asarray(value, dtype=float)
+                except Exception:
+                    continue
+
+                if self._is_usable_spectrogram_axis(candidate, expected_width=expected_width):
+                    return candidate
+
+            return None
+
+        depend_columns = [
+            query.arrays[query.all_fields.index(field_name)]
+            for field_name in present_depend_fields
+        ]
+        row_count = min(len(column) for column in depend_columns)
+
+        for row_index in range(row_count):
+            try:
+                candidate = np.asarray([column[row_index] for column in depend_columns], dtype=float)
+            except Exception:
+                continue
+
+            if self._is_usable_spectrogram_axis(candidate, expected_width=expected_width):
+                return candidate
+
+        return None
+
     def get_spectrogram_arrays(self, query):
         self.get_x_array(query)
 
@@ -335,37 +404,8 @@ class Plot():
         z_index = query.all_fields.index(z_field)
         z_source = query.arrays[z_index]
 
-        dep1_values = None
-        if self.variable.depend_1 is not None:
-            depend_var = self.variable.dataset.variables.get_or_none(name=self.variable.depend_1)
-            if depend_var is not None and depend_var.dynamic.exists():
-                depend_fields = list(depend_var.dynamic.order_by('multipart_index').values_list('field_name', flat=True))
-                present_depend_fields = [field_name for field_name in depend_fields if field_name in query.all_fields]
-                if len(present_depend_fields) == 1:
-                    dep1_values = query.arrays[query.all_fields.index(present_depend_fields[0])]
-                elif len(present_depend_fields) > 1:
-                    try:
-                        dep1_values = np.array(
-                            [query.arrays[query.all_fields.index(field_name)][0] for field_name in present_depend_fields],
-                            dtype=float,
-                        )
-                    except Exception:
-                        dep1_values = None
-
-        y_axis = None
-        if dep1_values is not None:
-            if isinstance(dep1_values, np.ndarray) and dep1_values.ndim == 1 and dep1_values.size > 1:
-                if not isinstance(dep1_values[0], (list, tuple, np.ndarray)):
-                    y_axis = dep1_values.astype(float)
-
-            if y_axis is None:
-                for value in dep1_values:
-                    if isinstance(value, (list, tuple, np.ndarray)) and len(value) > 0:
-                        y_axis = np.array(value, dtype=float)
-                        break
-
         rows = []
-        inferred_width = len(y_axis) if y_axis is not None else None
+        inferred_width = None
 
         for value in z_source:
             if isinstance(value, (list, tuple, np.ndarray)):
@@ -383,6 +423,7 @@ class Plot():
             self.y_axis_array = np.array([])
             return
 
+        y_axis = self._extract_spectrogram_y_axis(query, expected_width=inferred_width)
         normalized_rows = []
         for row in rows:
             if row.size == inferred_width:
