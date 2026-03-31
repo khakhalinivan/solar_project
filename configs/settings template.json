@@ -1,0 +1,22 @@
+{
+    "S_K": "",
+    "DB": {
+        "DB_NAME": "",
+        "DB_USER": "",
+        "DB_PASS": "",
+        "DB_HOST": "127.0.0.1",
+        "DB_PORT": "5432",
+        "ENGINE": "django.db.backends.postgresql"
+    },
+    "LOADER": {
+        "DATA_ROOT": "./solarterra/data",
+        "MATCH_FILE_DIR": "./solarterra/data/match_files",
+        "UPLOAD_ZIP_DIR": "./solarterra/data/upload_zip"
+    },
+    "LOG_FILE": "./solarterra/logs/log",
+    "COLLISIONS_LOG_DIR": "./logs/collisions_log",
+    "ALLOWED_HOSTS": [
+        "localhost",
+        "127.0.0.1"
+    ]
+}
