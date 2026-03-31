@@ -67,6 +67,3 @@ import os, django
 
 from load_cdf.models import *
 count_cdf_files()
-
-
-# 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
