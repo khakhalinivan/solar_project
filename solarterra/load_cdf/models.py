@@ -1,0 +1,723 @@
+from django.db import models
+import uuid
+import datetime
+import re
+import json
+from solarterra.abstract_models import GetManager
+from django.apps import apps
+from django.conf import settings
+from solarterra.utils import NOW
+import os
+import numpy as np
+from django.core import management
+from django.db.models import Q
+
+
+#------ float32 tryout------------#
+
+# POSTGRES ONLY IMPLEMENTATION
+class Float32Field(models.Field):
+
+    def db_type(self, connection):
+        return "real"
+
+
+class Upload(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    zip_path = models.TextField()
+    match_file_path = models.TextField()
+
+    #  goes after the dataset tag in zipname (for WIND_WIND_OR_PRE_v01_u123 it would be 123)
+    u_tag = models.CharField(max_length=200)
+
+    created = models.DateTimeField(auto_now_add=True)
+
+    dataset = models.ForeignKey(
+        "Dataset", on_delete=models.CASCADE, related_name="uploads", blank=True, null=True)
+
+    # progress flags
+    # 1 step
+    dataset_created = models.BooleanField(default=False)
+    # 2 step
+    data_tree_created = models.BooleanField(default=False)
+    # 3 step
+    dataset_attributes_created = models.BooleanField(default=False)
+    # same step, no separate flag for variable attributes, as they are Variable instance dependent
+    variables_created = models.BooleanField(default=False)
+    # 4 step
+    matchfile_global_applied = models.BooleanField(default=False)
+    # 5 step
+    matchfile_vars_applied = models.BooleanField(default=False)
+    # 6 step
+    dynamic_model_created = models.BooleanField(default=False)
+    # 7 step should is checked with a method instead
+    
+    objects = GetManager()
+
+    # for saving instances before bulk inserts during evaluate
+    def __init__(self, *args, **kwargs):
+
+        super(Upload, self).__init__(*args, **kwargs)
+        # dataset_attribute_list
+        self.da_list = []
+        # variable list
+        self.var_list = []
+        # variable attribute list
+        self.var_attr_list = []
+
+
+    class Meta:
+        unique_together = ['u_tag', 'dataset']
+
+    def __str__(self):
+        return f"{self.u_tag}_{self.dataset.tag}"
+
+    def update(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        self.save()
+
+
+    def terminate(self, terminal=True):
+        # launch management undo command 
+        management.call_command("undo", self.u_tag, self.dataset.tag)
+        if terminal:
+            exit(1)
+
+    def files_found(self):
+        return self.cdf_files.count()
+
+    def files_loaded(self):
+        return self.cdf_files.filter(loaded=True).count()
+    
+    # 7th step checked
+    def data_model_file_exists(self):
+        if hasattr(self.dataset, 'dynamic') and os.path.exists(self.dataset.dynamic.model_file_path):
+            return True
+        return False
+
+    def ordered_logs(self):
+        return self.logs.order_by('-timestamp')
+
+
+
+class CDFFileStored(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # the name of the file
+    full_path = models.CharField(max_length=300)
+
+    # the upload it belongs to
+    upload = models.ForeignKey(
+        "Upload", on_delete=models.CASCADE, related_name="cdf_files")
+
+    loaded = models.BooleanField(default=False)
+    saved_rows = models.IntegerField(default=0)
+
+    objects = GetManager()
+
+    def __str__(self):
+        return self.full_path
+    
+    def update(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        self.save()
+
+
+
+# ------------datasets---------------------#
+'''
+    Dataset is a collection of CDF files that share the same 
+    match file. It is identified by a DATASET_TAG
+    which is also the full path to the directory where the files are stored.
+'''
+
+class DatasetManager(GetManager):
+
+    def have_data(self):
+        ids = []
+        for ds in self.all():
+            
+            if not hasattr(ds, 'dynamic'):
+                continue
+            
+            data_model = ds.dynamic.resolve_class()
+            
+            if data_model is None:
+                continue
+            
+            if data_model.objects.exists():
+                ids.append(ds.id)
+
+        return self.filter(id__in=ids)
+
+
+class Dataset(models.Model):
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # the tag is the name of the directory where the files are stored + the name of the match file
+    # e.g. WIND_WIND_OR_PRE_v01
+    tag = models.CharField(max_length=100, unique=True)
+    # should be required
+    directory = models.TextField()
+    # global attributes from match file - tag parts
+    mission = models.CharField(max_length=100)
+    source_name = models.CharField(max_length=100)
+    data_type = models.CharField(max_length=100)
+    instrument = models.CharField(max_length=100)
+    dataset_version = models.CharField(max_length=100)
+
+    # global attributes from match file - dataset description
+    text_description = models.TextField(blank=True, null=True)
+    logical_source = models.CharField(max_length=200, blank=True, null=True)
+    logical_description = models.TextField(blank=True, null=True)
+    pi_name = models.CharField(max_length=200, blank=True, null=True)
+    pi_affiliation = models.CharField(max_length=200, blank=True, null=True)
+
+    created = models.DateTimeField(auto_now_add=True)
+    modified = models.DateTimeField(auto_now=True)
+
+    objects = DatasetManager()
+
+    def __str__(self):
+        return self.tag
+    
+    def update(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        self.save()
+    
+    def plottable_variables(self):
+        return self.variables.filter(
+            var_logic_type="data"
+        ).filter(
+            Q(display_type="time_series") | Q(display_type="spectrogram")
+        ).order_by('depend_0', 'name')
+    
+    def is_migrated(self):
+        return self.dynamic.resolve_class() is not None
+
+    def has_data(self):
+        if self.is_migrated():
+            data_model = self.dynamic.resolve_class()
+            return data_model.objects.exists()
+    
+    def files_found(self):
+        file_count = 0
+        for upload  in self.uploads.all():
+            file_count += upload.files_found()
+        return file_count
+    
+    def files_loaded(self):
+        file_count = 0
+        for upload  in self.uploads.all():
+            file_count += upload.files_loaded()
+        return file_count
+    
+
+    def data_variables(self):
+        return self.variables.filter(var_logic_type="data").order_by('name')
+    
+    def support_variables(self):
+        return self.variables.filter(var_logic_type="support_data").order_by('name')
+    
+    def meta_variables(self):
+        return self.variables.filter(var_logic_type="meta_data").order_by('name')
+
+
+
+
+
+# in case of multiple values create multiple instances with the same title
+# will there be considerable overhead on save if unique together for title and value is added?
+class DatasetAttribute(models.Model):
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    title = models.CharField(max_length=100)
+    value = models.TextField(blank=True, null=True)
+    dataset = models.ForeignKey(
+        "Dataset", on_delete=models.CASCADE, related_name="attributes", blank=True, null=True)
+
+    linked_standard_field = models.CharField(
+        max_length=100, blank=True, null=True)  # name of the field in Dataset model
+
+   
+    def update(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        self.save()
+
+    def is_standard(self):
+        return self.linked_standard_field is not None
+
+    def __str__(self):
+        return self.title
+
+# ------------demarcation to vars---------------------#
+class VariableManager(GetManager):
+
+    # same condition as in Dataset.plottable_variables(), make dataset relation manager on variable the same as this one
+    def plottable(self):
+        datasets = Dataset.objects.have_data()
+        return self.filter(
+            dataset__in=datasets,
+            var_logic_type="data",
+        ).filter(
+            Q(display_type="time_series") | Q(display_type="spectrogram")
+        ).order_by('dataset__tag', 'name')
+
+    def form_choices(self):
+        return [(var.id, var.name) for var in self.plottable()]
+
+
+'''
+    Variable is a single variable in dataset CDF files.
+'''
+class Variable(models.Model):
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    name = models.CharField(max_length=100)
+
+    # -------MFLBL fields--------
+
+    # original cdf datatype, before conversion to Django
+
+    datatype = models.CharField(max_length=200, blank=True, null=True)
+
+    dims = models.PositiveSmallIntegerField(blank=True, null=True)
+    dim_sizes = models.PositiveSmallIntegerField(blank=True, null=True)
+    
+    is_displayed = models.BooleanField(blank=True, null=True, default=False)
+
+    # this one for future use, not used now
+    data_category = models.CharField(max_length=200, blank=True, null=True)
+
+    # -----MF fields------
+
+    catdesc = models.CharField(max_length=200, blank=True, null=True)
+    var_notes = models.TextField(blank=True, null=True)
+    depend_0 = models.CharField(max_length=200, blank=True, null=True)
+    depend_1 = models.CharField(max_length=200, blank=True, null=True)
+    display_type = models.CharField(max_length=200, blank=True, null=True)
+    scaletyp = models.CharField(max_length=200, blank=True, null=True)
+    # data, meta_data or support_data 
+    var_logic_type = models.CharField(max_length=200, blank=True, null=True)
+    # this is always a list of strings (often contains a single string), saved as-is from the match file
+    fillval = models.CharField(max_length=50, blank=True, null=True)
+    # all JSON fields are expected to contain lists of strings (lists of lists for spectrogramms)
+    output_format = models.JSONField(blank=True, null=True)
+    lablaxis = models.JSONField(blank=True, null=True)
+    units = models.JSONField(blank=True, null=True)
+    validmin = models.JSONField(blank=True, null=True)
+    validmax = models.JSONField(blank=True, null=True)
+    scalemin = models.JSONField(blank=True, null=True)
+    scalemax = models.JSONField(blank=True, null=True)
+
+    dataset = models.ForeignKey(
+        "Dataset", on_delete=models.CASCADE, related_name="variables")
+
+
+    objects = VariableManager()
+
+
+    def __str__(self):
+        return self.name
+
+    def get_depend_field(self):
+        if self.depend_0 is not None:
+            depend_var = self.dataset.variables.get(name=self.depend_0)
+            if depend_var is not None and depend_var.dynamic.count() == 1:
+                return depend_var.dynamic.first()
+
+    def get_numpy_data_type(self):
+        field_instance = self.dynamic.first()
+        if field_instance is not None:
+            if field_instance.data_type_instance is not None:
+                return field_instance.data_type_instance.numpy_type
+
+    def get_list_of_fields(self):
+        return list(self.dynamic.order_by('multipart_index').values_list('field_name', flat=True))
+    
+    def ordered_attributes(self):
+        return self.attributes.order_by('title')
+
+    @staticmethod
+    def normalize_unit(unit_value):
+        if unit_value is None:
+            return ""
+
+        unit = str(unit_value).strip()
+        if not unit:
+            return ""
+
+        unit = unit.replace("#", "").strip()
+        if not unit:
+            return ""
+
+        if len(unit) >= 2 and ((unit[0] == "[" and unit[-1] == "]") or (unit[0] == "(" and unit[-1] == ")")):
+            unit = unit[1:-1].strip()
+
+        if "/" in unit:
+            parts = [p.strip() for p in unit.split("/") if p.strip()]
+            if len(parts) > 1:
+                numerator = parts[0]
+                denominator_parts = parts[1:]
+                counts = {}
+                order = []
+                for part in denominator_parts:
+                    if part not in counts:
+                        counts[part] = 0
+                        order.append(part)
+                    counts[part] += 1
+
+                formatted_parts = []
+                if numerator and numerator != "1":
+                    formatted_parts.append(numerator)
+                for part in order:
+                    power = counts[part]
+                    if power == 1:
+                        formatted_parts.append(f"{part}<sup>-1</sup>")
+                    else:
+                        formatted_parts.append(f"{part}<sup>-{power}</sup>")
+                if formatted_parts:
+                    unit = "·".join(formatted_parts)
+
+        unit = re.sub(r"\*\*([+-]?\d+)", r"<sup>\1</sup>", unit)
+        unit = re.sub(r"\^([+-]?\d+)", r"<sup>\1</sup>", unit)
+        unit = re.sub(r"(?<=[A-Za-z\)])([+-]\d+)", r"<sup>\1</sup>", unit)
+
+        return unit
+
+    def get_unit_label(self, index=None):
+        if self.units is None:
+            return ""
+
+        if isinstance(self.units, list):
+            if index is not None:
+                if index < len(self.units):
+                    return self.normalize_unit(self.units[index])
+                return ""
+
+            for unit_candidate in self.units:
+                unit = self.normalize_unit(unit_candidate)
+                if unit:
+                    return unit
+            return ""
+
+        return self.normalize_unit(self.units)
+
+    def get_axis_label(self, index=None):
+        if index is not None and isinstance(self.lablaxis, list):
+            label = self.lablaxis[index] if index < len(self.lablaxis) else self.name
+        elif isinstance(self.lablaxis, str):
+            label = self.lablaxis
+        else:
+            label = self.name
+
+        unit_label = self.get_unit_label(index)
+        if unit_label:
+            label += f", {unit_label}"
+
+        return label
+
+
+class VariableAttribute(models.Model):
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    title = models.CharField(max_length=100)
+    value = models.TextField(blank=True, null=True)
+    data_type = models.CharField(max_length=100, blank=True, null=True)
+
+    variable = models.ForeignKey(
+        "Variable", on_delete=models.CASCADE, related_name="attributes")
+    linked_standard_field = models.CharField(
+        max_length=100, blank=True, null=True)  # name of the field in Dataset model
+
+
+    objects = GetManager()
+    
+    def update(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        self.save()
+
+    def is_standard(self):
+        return self.linked_standard_field is not None
+
+    def __str__(self):
+        return self.title
+
+
+# ------------demarcation to dynamic models---------------------#
+
+
+class DynamicModel(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # string reference to existing MODEL
+    model_name = models.CharField(max_length=100)
+
+    # actual Dataset it is made for
+    dataset_instance = models.OneToOneField(
+        "Dataset", on_delete=models.CASCADE, related_name="dynamic", blank=True, null=True)
+
+    model_file_path = models.TextField()
+
+    objects = GetManager()
+
+    # for saving instances before bulk inserts during evaluate
+    def __init__(self, *args, **kwargs):
+
+        super(DynamicModel, self).__init__(*args, **kwargs)
+        # dynamic_field_list
+        self.df_list = []
+
+
+    def __str__(self):
+        return self.model_name
+
+    def resolve_class(self):
+        try:
+            model_class = apps.get_model(
+                app_label='data_cdf', model_name=self.model_name)
+            return model_class
+        except:
+            return None
+
+
+    # def data_variables(self):
+    #     return self.dataset_instance.variables.filter(var_logic_type='data')
+
+
+
+class DynamicField(models.Model):
+    STORAGE_SCALAR = "scalar"
+    STORAGE_ARRAY = "array"
+    STORAGE_CHOICES = [
+        (STORAGE_SCALAR, "Scalar"),
+        (STORAGE_ARRAY, "Array"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # string reference to existing MODEL FIELD
+    field_name = models.CharField(max_length=100)
+
+    # is it made from multiple vars?
+    multipart = models.BooleanField(default=False)
+
+    multipart_index = models.PositiveSmallIntegerField(blank=True, null=True)
+
+    # actual variable instance it represents
+    variable_instance = models.ForeignKey("Variable", on_delete=models.CASCADE, related_name="dynamic")
+    
+    # field of which model is it
+    dynamic_model = models.ForeignKey("DynamicModel", on_delete=models.CASCADE, related_name="fields")
+
+    data_type_instance = models.ForeignKey('DataType', related_name="fields", on_delete=models.SET_NULL, blank=True, null=True)
+    storage_mode = models.CharField(max_length=20, choices=STORAGE_CHOICES, default=STORAGE_SCALAR)
+
+    objects = GetManager()
+
+    
+    def update(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        self.save()
+
+
+    def __str__(self):
+        return self.field_name
+
+    # def get_time_field(self):
+    #     time_var = self.variable_instance.dataset.variables.filter(
+    #         name__icontains='epoch').first()
+    #     if time_var is not None and self.variable_instance.depend_0.lower() == 'epoch':
+    #         return time_var.dynamic.first()
+    #     else:
+    #         return None
+
+    # def get_time_field_name(self):
+    #     time_field = self.get_time_field()
+    #     if time_field is not None:
+    #         return time_field.field_name
+    #     else:
+    #         return None
+
+
+class DataType(models.Model):
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # label from CDF file, set to each variable
+    cdf_file_label = models.CharField(max_length=50, unique=True)
+    # default null value
+    fillval = models.CharField(blank=True, null=True)
+
+    # for template construction
+    # django field closest to
+    django_field = models.CharField(max_length=200)
+    
+    numpy_type = models.CharField(max_length=50, blank=True, null=True)
+
+    
+    def __str__(self):
+        return self.cdf_file_label
+    
+    # takes a value in some numpy type, because python cdf library unpacks all data to numpy
+    @classmethod
+    def proper_type(cls, value_str, proper_value):
+        if value_str is None:
+            return None
+
+        # Matchfiles sometimes store fill values as single-item lists/arrays; normalize to a scalar.
+        if isinstance(value_str, (list, tuple, np.ndarray)):
+            if len(value_str) == 0:
+                return None
+            value_str = value_str[0]
+
+        if isinstance(value_str, bytes):
+            value_str = value_str.decode("utf-8", errors="ignore")
+
+        # Normalize to string for parsing below (numpy scalars, numbers, etc.).
+        if not isinstance(value_str, str):
+            value_str = str(value_str)
+
+        value_str = value_str.strip()
+        if not value_str:
+            return None
+
+        # Handle stringified JSON lists like "[-1.0E31]" or "[ -1, -1 ]".
+        if (value_str[0] in "[({" and value_str[-1] in "])}"):
+            try:
+                loaded = json.loads(value_str)
+                if isinstance(loaded, list):
+                    if not loaded:
+                        return None
+                    value_str = str(loaded[0]).strip()
+                else:
+                    value_str = str(loaded).strip()
+            except Exception:
+                # Fall back to regex token extraction below.
+                pass
+
+        # separate datetime case
+        if isinstance(proper_value, datetime.datetime):
+            template = "%d-%b-%Y %H:%M:%S.%f"
+            try:
+                dat = datetime.datetime.strptime(value_str, template)
+                return dat
+            except Exception as e:
+                # Some epoch fillvals come as numeric sentinels like "-1e+31".
+                # Try to interpret numeric strings via SpacePy epoch conversion.
+                m = re.search(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", value_str)
+                token = m.group(0) if m else None
+                if token is not None:
+                    try:
+                        from spacepy import pycdf  # imported lazily; only used during data load
+
+                        # CDF_EPOCH fillvals are float-like.
+                        if any(ch in token for ch in ".eE"):
+                            return pycdf.lib.epoch_to_datetime(float(token))
+
+                        # TT2000 fillvals are int-like; convert TT2000 -> EPOCH -> datetime.
+                        tt2000 = int(token)
+                        epoch = pycdf.lib.tt2000_to_epoch(tt2000)
+                        return pycdf.lib.epoch_to_datetime(epoch)
+                    except Exception:
+                        pass
+
+                make_log_entry(
+                    f"Could not convert value str '{value_str}' to datetime using template '{template}'",
+                    "ERROR",
+                )
+                return None
+
+        else:
+            try:
+                # Some integer fillvals come as strings like "65536.0".
+                # Parse via float first so int-like decimals are accepted.
+                if isinstance(proper_value, (int, np.integer)):
+                    return proper_value.__class__(float(value_str))
+                return proper_value.__class__(value_str)
+
+            except Exception as e:
+                # Try to extract a numeric token from strings like "[-1.0E31]" or "FILLVAL = -1.0E31".
+                lowered = value_str.lower()
+                if lowered in {"nan", "+nan", "-nan"}:
+                    token = "nan"
+                elif lowered in {"inf", "+inf", "infinity", "+infinity"}:
+                    token = "inf"
+                elif lowered in {"-inf", "-infinity"}:
+                    token = "-inf"
+                else:
+                    m = re.search(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", value_str)
+                    token = m.group(0) if m else None
+
+                if token is not None:
+                    try:
+                        if isinstance(proper_value, (int, np.integer)):
+                            return proper_value.__class__(float(token))
+                        return proper_value.__class__(token)
+                    except Exception:
+                        pass
+
+                make_log_entry(
+                    f"Could not convert value string '{value_str}' to '{proper_value.__class__}': {e}",
+                    "ERROR",
+                )
+                return None
+
+
+    # used for testing 
+    def vc(self, arr, value):
+        print(f"{value}: {len(arr[arr==value])} / {arr.shape}")
+
+
+    def is_epoch(self):
+        return 'EPOCH' in self.cdf_file_label
+
+
+class LogEntry(models.Model):
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    timestamp = models.DateTimeField(auto_now_add=True)
+    upload = models.ForeignKey(
+        "Upload", on_delete=models.CASCADE, related_name="logs", blank=True, null=True)
+    code = models.CharField(max_length=15, null=True, blank=True)
+    message = models.TextField()
+
+    objects = GetManager()
+
+    def __str__(self):
+        return f"{self.timestamp} {self.code}"
+
+
+def make_log_entry(message, code=None, upload=None, color=None):
+
+    def to_file(code, message):
+        s = f"{NOW()}   "
+        if code:
+            s += f"[{code}]   "
+        s += message
+        return s + "\n"
+
+    def to_db(upload, code, message):
+        log_entry = LogEntry(
+                timestamp=NOW(),
+                upload=upload,
+                code=code,
+                message=message)
+        log_entry.save()
+
+    with open(settings.LOG_FILE, mode="a") as f:
+        f.write(to_file(code, message))
+
+    if upload is not None:
+        to_db(upload, code, message)

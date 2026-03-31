@@ -1,0 +1,9 @@
+# virtual environment
+solar_venv/
+
+# data files
+solarterra/data/
+
+examples/
+
+__pycache__/
