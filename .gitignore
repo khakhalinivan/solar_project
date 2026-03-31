@@ -11,13 +11,10 @@ __pycache__/
 *.db
 
 # Файлы с секретами (никогда не коммитить!)
-./configs/settings.json
+configs/settings.json
 
 # Данные
 solarterra/data/
-
-# Примеры данных
-examples/
 
 # Миграции
 solarterra_submodules/data_cdf/migrations/
