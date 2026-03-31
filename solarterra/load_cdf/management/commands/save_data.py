@@ -27,7 +27,6 @@ def format_duration(seconds: float) -> str:
 
 
 def save_single_file(cdf_file, fields, model_class, upload):
-
     t_total_start = timeit.default_timer()
     if not os.path.exists(cdf_file.full_path):
         make_log_entry(
@@ -228,7 +227,7 @@ def save_single_file(cdf_file, fields, model_class, upload):
 
     cdf_file.update(loaded=True, saved_rows=len(insert_rows)) 
     t_insert = timeit.default_timer() - t_insert_start
-    print(len(insert_rows)) 
+    # print(len(insert_rows)) 
     del arr_collection
     del zipped_collection
     del insert_rows

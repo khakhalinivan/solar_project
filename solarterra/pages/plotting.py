@@ -11,16 +11,15 @@ from load_cdf.models import DynamicField
 
 
 def get_plots(variables, t_start, t_end, validate):
-     
+    print('get_plots')
     # do the work with the the bin
     Plot.t_start = t_start
     Plot.t_stop = t_end
     bin_instance = Bin(t_start, t_end)
     plots = []
 
-    for item in variables.order_by('dataset__tag', 'depend_0', 'display_type').distinct('dataset__tag', 'depend_0', 'display_type'):
+    for item in variables.order_by('dataset__tag', 'depend_0', '-display_type').distinct('dataset__tag', 'depend_0', 'display_type'):
 
-        #print(item.dataset, item.depend_0)
         vars_in_query = variables.filter(
             dataset=item.dataset,
             depend_0=item.depend_0,

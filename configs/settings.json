@@ -1,0 +1,22 @@
+{
+    "S_K": "!&j2559*gy&l_3ix-!a%*uvi$i^ltq@iz2q-n^*mki&7c&0ot4",
+    "DB": {
+        "DB_NAME": "test_project_khakhalinivan",
+        "DB_USER": "khakhalinivan",
+        "DB_PASS": "kjydQEu156!w",
+        "DB_HOST": "127.0.0.1",
+        "DB_PORT": "5432",
+        "ENGINE": "django.db.backends.postgresql"
+    },
+    "LOADER": {
+        "DATA_ROOT": "/home/khakhalinivan/projects/solar_project/solarterra/data",
+        "MATCH_FILE_DIR": "/home/khakhalinivan/projects/solar_project/solarterra/data/match_files",
+        "UPLOAD_ZIP_DIR": "/home/khakhalinivan/projects/solar_project/solarterra/data/upload_zip"
+    },
+    "LOG_FILE": "/home/khakhalinivan/projects/solar_project/solarterra/logs/log",
+    "COLLISIONS_LOG_DIR": "./logs/collisions_log",
+    "ALLOWED_HOSTS": [
+        "localhost",
+        "127.0.0.1"
+    ]
+}
